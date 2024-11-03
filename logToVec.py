@@ -1,5 +1,5 @@
 import weaviate
-import weaviate.classes as wvc
+from weaviate.classes.config import Configure
 import os
 import pandas as pd
 import time
@@ -7,62 +7,49 @@ import time
 #Before Running this code run the docker-compse file
 #Connect to weaviate instance
 client = weaviate.connect_to_local(
-    host = "localhost",
     headers={
         "X-OpenAI-Api-Key" : os.getenv("OPENAI_API_KEY")
     }
 )
 
-# Define the Schema object to use
-product_schema = {
-    "class": "Logs",
-    "description": "Log entries for recent log file",
-    "vectorizer": "text2vec-openai",
-    "moduleConfig": {
-        "text2vec-openai": {
-          "model": "ada",
-          "modelVersion": "002",
-          "type": "text"
-        }
-    },
-    "properties": [{
-        "name": "entry",
-        "description": "log entry",
-        "dataType": ["text"]
-    }]
-}
-
-# add the Article schema
-client.schema.create_class(product_schema)
-
-# get the schema to make sure it worked
-client.schema.get()
-
-#configure weaviate batch
-client.batch.configure(
-    batch_size = 10, #starting batch size
-    dynamic = True, #dynamically increase/decrease based on performance
-    timeout_retries = 3 #  timeout retries if anything goes wrong
+#initialize model and parameters
+embeddings = client.collections.create(
+    name = "LogParser",
+    vectorizer_config=[
+        Configure.NamedVectors.text2vec_openai(
+            name="Logs",
+            source_properties=["log"],
+            model="text-embedding-3-small",
+            dimensions=1536
+        )
+    ]
 )
+
+collection = client.collections.get("LogParser")
 
 #read log file and change each entry into an embedding
-f = open("samplelog.ext", "r")
+f = open("samplelog.txt", "r")
 
+#import data
 counter = 0
-for entry in f:
-    if (counter %10 == 0):
-        print(f"Import {counter} / {len(f)} ")
-    
-    properties = {"entry" : entry}
+with collection.batch.dynamic() as batch:
+    for entry in f:
+        print(entry)
+        if entry == "\n":
+            print("Line Skipped")
+            continue
+        if (counter %10 == 0):
+            print(f"Import {counter} / total")
+        
+        weaviate_obj = {
+            "log": entry
+        }
 
-    client.batch.add_data_object(properties, "Logs")
-    counter += 1
-    time.sleep(1)
+        batch.add_object(
+            properties=weaviate_obj
+        )
+        counter += 1
+        time.sleep(0.1)
 
-# Test that all data has loaded – get object count
-result = (
-    client.query.aggregate("Logs")
-    .with_fields("meta { count }")
-    .do()
-)
-print("Object count: ", result["data"]["Aggregate"]["Logs"], "\n")
+f.close()
+client.close()
